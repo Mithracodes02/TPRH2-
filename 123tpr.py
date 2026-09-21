@@ -1,244 +1,81 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
+import os
 import matplotlib.pyplot as plt
-from scipy.signal import find_peaks
-import io
-import re
+import pandas as pd
+import xlrd
 
-st.set_page_config(page_title="H2-TPR Data Analyzer", layout="wide")
 
-st.title("🧪 Advanced H₂-TPR Data Analyzer")
-st.markdown("Upload Excel or CSV data, extract TCD and Temperature columns, plot TPR profiles, and calculate reduction degree and Cu dispersion.")
+def process_tpr_data(input_file_path, output_excel_path, plot_image_path):
+    # 1. Read raw sheet using xlrd
+    workbook = xlrd.open_workbook(input_file_path)
+    sheet = workbook.sheet_by_index(0)
 
-# Sidebar - Data Import
-st.sidebar.header("1. Data Import")
-uploaded_file = st.sidebar.file_uploader("Upload Data File (.xlsx, .xls, .csv, .txt, .dat)", type=["xlsx", "xls", "csv", "txt", "dat"])
+    # 2. Extract Data Rows for Temperature vs TCD Signal (Columns 22 & 23 in raw block)
+    data_rows = []
+    for r in range(24, sheet.nrows):
+        val_temp = sheet.cell_value(r, 22)
+        val_tcd = sheet.cell_value(r, 23)
+        if isinstance(val_temp, (int, float)) and isinstance(val_tcd, (int, float)):
+            data_rows.append({"Temperature (°C)": val_temp, "TCD Signal (a.u.)": val_tcd})
 
-if uploaded_file is not None:
-    file_ext = uploaded_file.name.split(".")[-1].lower()
-    df = None
-    
-    try:
-        # Attempt to read Excel files
-        if file_ext in ["xlsx", "xls"]:
-            try:
-                uploaded_file.seek(0)
-                excel_file = pd.ExcelFile(uploaded_file, engine="openpyxl")
-                sheet_name = st.sidebar.selectbox("Select Excel Sheet", excel_file.sheet_names)
-                skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=0)
-                df = pd.read_excel(uploaded_file, sheet_name=sheet_name, skiprows=skiprows, engine="openpyxl")
-            except Exception:
-                file_ext = "csv"  # Fall back to text processing
+    df = pd.DataFrame(data_rows)
 
-        if file_ext not in ["xlsx", "xls"] or df is None:
-            # Text / CSV / DAT file handling
-            uploaded_file.seek(0)
-            raw_bytes = uploaded_file.read()
-            raw_text = raw_bytes.decode("latin1")
-            lines = raw_text.splitlines()
+    # 3. Calculate Key Metrics
+    max_idx = df["TCD Signal (a.u.)"].idxmax()
+    t_max = df.loc[max_idx, "Temperature (°C)"]
+    signal_max = df.loc[max_idx, "TCD Signal (a.u.)"]
 
-            st.sidebar.markdown("---")
-            skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=18)
-            delimiter_choice = st.sidebar.selectbox("Delimiter Mode", ["Auto-detect (Whitespace / Tab)", "Comma (,)", "Semicolon (;)", "Tab (\\t)", "Space (\\s+)"])
+    summary_df = pd.DataFrame(
+        [
+            {"Metric": "Sample Name", "Value": "Inv95Cu5Zr 02.07.2026"},
+            {"Metric": "Data Points Count", "Value": len(df)},
+            {"Metric": "T_max (°C)", "Value": round(t_max, 2)},
+            {"Metric": "Max TCD Signal (a.u.)", "Value": round(signal_max, 6)},
+            {
+                "Metric": "Min Temperature (°C)",
+                "Value": round(df["Temperature (°C)"].min(), 2),
+            },
+            {
+                "Metric": "Max Temperature (°C)",
+                "Value": round(df["Temperature (°C)"].max(), 2),
+            },
+        ]
+    )
 
-            sep_map = {
-                "Auto-detect (Whitespace / Tab)": r"\s+",
-                "Comma (,)": ",",
-                "Semicolon (;)": ";",
-                "Tab (\\t)": r"\t",
-                "Space (\\s+)": r"\s+"
-            }
-            sep = sep_map[delimiter_choice]
+    # 4. Generate Plot
+    plt.figure(figsize=(10, 5))
+    plt.plot(
+        df["Temperature (°C)"],
+        df["TCD Signal (a.u.)"],
+        color="crimson",
+        linewidth=1.5,
+        label="TCD Signal",
+    )
+    plt.title(
+        "TCD Signal (a.u.) vs. Temperature (°C)\nSample: Inv95Cu5Zr 02.07.2026",
+        fontsize=12,
+        pad=10,
+    )
+    plt.xlabel("Temperature (°C)", fontsize=11)
+    plt.ylabel("TCD Signal (a.u.)", fontsize=11)
+    plt.grid(True, linestyle="--", alpha=0.6)
+    plt.legend(loc="upper right")
+    plt.tight_layout()
+    plt.savefig(plot_image_path, dpi=300)
+    plt.close()
 
-            clean_text = "\n".join(lines[skiprows:])
-            df = pd.read_csv(
-                io.StringIO(clean_text),
-                sep=sep,
-                engine="python",
-                on_bad_lines="skip",
-                header=None
-            )
+    # 5. Export Ready-to-Download Excel File
+    with pd.ExcelWriter(output_excel_path, engine="openpyxl") as writer:
+        summary_df.to_excel(writer, sheet_name="Summary", index=False)
+        df.to_excel(writer, sheet_name="TPR Data", index=False)
 
-        st.sidebar.success("File loaded successfully!")
+    print(f"Report generated successfully:\n- Excel: {output_excel_path}\n- Plot: {plot_image_path}")
+    return df
 
-        # Preview Data Table in Sidebar
-        with st.sidebar.expander("Preview Raw Loaded Data", expanded=True):
-            st.dataframe(df.head(15))
 
-        # Column Selection
-        st.sidebar.header("2. Map Columns")
-        columns = df.columns.tolist()
-        
-        col_options = [f"Column {c}" if isinstance(c, int) else str(c) for c in columns]
-        
-        temp_idx = st.sidebar.selectbox("X-Axis: Temperature Column (°C)", range(len(columns)), format_func=lambda i: col_options[i], index=0)
-        signal_idx = st.sidebar.selectbox("Y-Axis: TCD Signal Column (a.u. / mV)", range(len(columns)), format_func=lambda i: col_options[i], index=1 if len(columns) > 1 else 0)
+# Example Execution
+if __name__ == "__main__":
+    input_file = "Inv 95Cu5ZrO2 02.07.26.xls"
+    output_excel = "Inv95Cu5ZrO2_TPR_Report.xlsx"
+    plot_file = "tcd_vs_temperature.png"
 
-        # Helper function to reliably convert mixed strings/numbers into float arrays
-        def extract_numeric_array(series):
-            cleaned_vals = []
-            for val in series:
-                if pd.isna(val):
-                    continue
-                val_str = str(val).strip().replace(',', '.')  # Handle European comma decimals
-                match = re.search(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', val_str)
-                if match:
-                    try:
-                        cleaned_vals.append(float(match.group()))
-                    except ValueError:
-                        cleaned_vals.append(np.nan)
-                else:
-                    cleaned_vals.append(np.nan)
-            return np.array(cleaned_vals)
-
-        raw_x = df.iloc[:, temp_idx]
-        raw_y = df.iloc[:, signal_idx]
-
-        x_parsed = extract_numeric_array(raw_x)
-        y_parsed = extract_numeric_array(raw_y)
-
-        # Align array lengths and remove NaNs
-        min_len = min(len(x_parsed), len(y_parsed))
-        x_parsed = x_parsed[:min_len]
-        y_parsed = y_parsed[:min_len]
-
-        valid_idx = ~np.isnan(x_parsed) & ~np.isnan(y_parsed)
-        x = x_parsed[valid_idx]
-        y = y_parsed[valid_idx]
-
-        if len(x) == 0:
-            st.error("No numeric data found in selected columns. Check column selection or increase 'Header Lines to Skip'.")
-        else:
-            # Baseline Correction
-            st.sidebar.header("3. Baseline Correction")
-            apply_baseline = st.sidebar.checkbox("Apply Linear Baseline Subtraction", value=True)
-            if apply_baseline:
-                poly_fit = np.polyfit([x[0], x[-1]], [y[0], y[-1]], 1)
-                baseline = np.polyval(poly_fit, x)
-                y_corrected = y - baseline
-                y_corrected = np.maximum(y_corrected, 0)
-            else:
-                baseline = np.zeros_like(y)
-                y_corrected = y
-
-            # Catalyst & Chemisorption Parameters
-            st.sidebar.header("4. Catalyst & Quantitative Parameters")
-            sample_mass_mg = st.sidebar.number_input("Sample Mass (mg)", min_value=0.1, value=50.0, step=1.0)
-            cu_wt_pct = st.sidebar.number_input("Cu Loading (wt%)", min_value=0.01, max_value=100.0, value=10.0, step=0.5)
-            calib_factor = st.sidebar.number_input("Calibration Factor (μmol H₂ / (a.u. · °C))", min_value=1e-8, value=1.0, format="%.6f")
-            stoich_ratio = st.sidebar.selectbox("Cu Oxidation State Mode", ["CuO -> Cu (1 H2 : 1 Cu)", "Cu2O -> Cu (0.5 H2 : 1 Cu)"], index=0)
-
-            # Main Dashboard Display
-            col1, col2 = st.columns([2, 1])
-
-            # Peak Detection Sensitivity
-            prominence = st.sidebar.slider("Peak Detection Sensitivity", 0.0, float(np.ptp(y_corrected)), float(np.ptp(y_corrected) * 0.05))
-            peaks, _ = find_peaks(y_corrected, prominence=prominence)
-
-            with col1:
-                st.subheader("📊 TPR Profile (Temperature on X-Axis)")
-                
-                # Plot
-                fig, ax = plt.subplots(figsize=(8, 5))
-                ax.plot(x, y_corrected, label="Corrected TCD Signal", color="crimson", lw=1.8)
-                ax.plot(x[peaks], y_corrected[peaks], "ro", markersize=6, label="Reduction Maxima ($T_m$)")
-                
-                for p in peaks:
-                    ax.annotate(f"{x[p]:.1f} °C", (x[p], y_corrected[p]), textcoords="offset points", xytext=(0, 10), ha='center', fontsize=9, fontweight='bold')
-                
-                ax.set_xlabel("Temperature (°C)", fontsize=11)
-                ax.set_ylabel("TCD Signal (a.u.)", fontsize=11)
-                ax.grid(True, linestyle="--", alpha=0.5)
-                ax.legend(frameon=True)
-                st.pyplot(fig)
-
-            # Quantitative Calculations
-            total_area = np.trapz(y_corrected, x)
-            exp_h2_consumed_umol = total_area * calib_factor
-            exp_h2_per_g = (exp_h2_consumed_umol / sample_mass_mg) * 1000  # μmol H2 / g_cat
-            
-            cu_moles_per_g = (cu_wt_pct / 100.0) / 63.546  # mol Cu / g_cat
-            stoich_factor = 1.0 if "CuO" in stoich_ratio else 0.5
-            theo_h2_per_g = cu_moles_per_g * stoich_factor * 1e6  # μmol H2 / g_cat
-            
-            reduction_pct = min((exp_h2_per_g / theo_h2_per_g) * 100.0, 100.0) if theo_h2_per_g > 0 else 0.0
-            dispersion_pct = min((exp_h2_per_g / theo_h2_per_g) * 100.0, 100.0) if theo_h2_per_g > 0 else 0.0
-
-            with col2:
-                st.subheader("📌 Reduction Peaks ($T_m$)")
-                if len(peaks) > 0:
-                    peak_df = pd.DataFrame({
-                        "Peak": [f"Peak {i+1}" for i in range(len(peaks))],
-                        "T_m (°C)": x[peaks],
-                        "Intensity (a.u.)": y_corrected[peaks]
-                    })
-                    st.dataframe(peak_df, hide_index=True)
-                else:
-                    peak_df = pd.DataFrame(columns=["Peak", "T_m (°C)", "Intensity (a.u.)"])
-                    st.info("No reduction peaks detected. Lower sensitivity slider in sidebar.")
-
-                st.subheader("🧮 Quantitative Analysis")
-                st.metric("Total Integrated Area", f"{total_area:.2f}")
-                st.metric("Exp. H₂ Consumed", f"{exp_h2_per_g:.2f} μmol/g_cat")
-                st.metric("Theo. H₂ Limit", f"{theo_h2_per_g:.2f} μmol/g_cat")
-                st.metric("Degree of Reduction (%)", f"{reduction_pct:.2f} %")
-                st.metric("Cu Dispersion (%)", f"{dispersion_pct:.2f} %")
-
-            # --- EXCEL REPORT GENERATION ---
-            st.markdown("---")
-            st.subheader("📥 Export Analysis Report")
-            
-            # Prepare Dataframes for Excel Export
-            summary_df = pd.DataFrame({
-                "Parameter": [
-                    "Sample Mass (mg)",
-                    "Cu Loading (wt%)",
-                    "Calibration Factor",
-                    "Oxidation Mode",
-                    "Total Integrated Area",
-                    "Experimental H2 Consumed (μmol/g_cat)",
-                    "Theoretical H2 Limit (μmol/g_cat)",
-                    "Degree of Reduction (%)",
-                    "Cu Dispersion (%)"
-                ],
-                "Value": [
-                    sample_mass_mg,
-                    cu_wt_pct,
-                    calib_factor,
-                    stoich_ratio,
-                    total_area,
-                    exp_h2_per_g,
-                    theo_h2_per_g,
-                    reduction_pct,
-                    dispersion_pct
-                ]
-            })
-
-            data_df = pd.DataFrame({
-                "Temperature (°C)": x,
-                "Raw TCD Signal": y,
-                "Subtracted Baseline": baseline,
-                "Corrected TCD Signal": y_corrected
-            })
-
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                summary_df.to_excel(writer, sheet_name="Analysis Summary", index=False)
-                peak_df.to_excel(writer, sheet_name="Peak Temperatures", index=False)
-                data_df.to_excel(writer, sheet_name="Processed Data", index=False)
-
-            excel_data = output.getvalue()
-
-            st.download_button(
-                label="📊 Download Full Excel Report (.xlsx)",
-                data=excel_data,
-                file_name="H2_TPR_Analysis_Report.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
-    except Exception as e:
-        st.error(f"Error processing dataset: {e}")
-
-else:
-    st.info("Please upload an Excel or CSV/text file in the sidebar to begin.")
+    process_tpr_data(input_file, output_excel, plot_file)
