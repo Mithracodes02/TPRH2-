@@ -72,8 +72,8 @@ if uploaded_file is not None:
         
         col_options = [f"Column {c}" if isinstance(c, int) else str(c) for c in columns]
         
-        temp_idx = st.sidebar.selectbox("Temperature Column (°C)", range(len(columns)), format_func=lambda i: col_options[i], index=0)
-        signal_idx = st.sidebar.selectbox("TCD Signal Column (a.u. / mV)", range(len(columns)), format_func=lambda i: col_options[i], index=1 if len(columns) > 1 else 0)
+        temp_idx = st.sidebar.selectbox("X-Axis: Temperature Column (°C)", range(len(columns)), format_func=lambda i: col_options[i], index=0)
+        signal_idx = st.sidebar.selectbox("Y-Axis: TCD Signal Column (a.u. / mV)", range(len(columns)), format_func=lambda i: col_options[i], index=1 if len(columns) > 1 else 0)
 
         # Helper function to reliably convert mixed strings/numbers into float arrays
         def extract_numeric_array(series):
@@ -82,7 +82,6 @@ if uploaded_file is not None:
                 if pd.isna(val):
                     continue
                 val_str = str(val).strip().replace(',', '.')  # Handle European comma decimals
-                # Regex match float or integer patterns (e.g., -12.34 or 500)
                 match = re.search(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', val_str)
                 if match:
                     try:
@@ -109,7 +108,7 @@ if uploaded_file is not None:
         y = y_parsed[valid_idx]
 
         if len(x) == 0:
-            st.error("No numeric data found in selected columns. Try setting 'Header Lines to Skip' to 19 or 20 in the sidebar, or check 'Preview Raw Loaded Data'.")
+            st.error("No numeric data found in selected columns. Check column selection or increase 'Header Lines to Skip'.")
         else:
             # Baseline Correction
             st.sidebar.header("3. Baseline Correction")
@@ -120,6 +119,7 @@ if uploaded_file is not None:
                 y_corrected = y - baseline
                 y_corrected = np.maximum(y_corrected, 0)
             else:
+                baseline = np.zeros_like(y)
                 y_corrected = y
 
             # Catalyst & Chemisorption Parameters
@@ -132,12 +132,12 @@ if uploaded_file is not None:
             # Main Dashboard Display
             col1, col2 = st.columns([2, 1])
 
+            # Peak Detection Sensitivity
+            prominence = st.sidebar.slider("Peak Detection Sensitivity", 0.0, float(np.ptp(y_corrected)), float(np.ptp(y_corrected) * 0.05))
+            peaks, _ = find_peaks(y_corrected, prominence=prominence)
+
             with col1:
-                st.subheader("📊 TPR Profile & Reduction Temperatures")
-                
-                # Peak Finding Sensitivity
-                prominence = st.sidebar.slider("Peak Detection Sensitivity", 0.0, float(np.ptp(y_corrected)), float(np.ptp(y_corrected) * 0.05))
-                peaks, _ = find_peaks(y_corrected, prominence=prominence)
+                st.subheader("📊 TPR Profile (Temperature on X-Axis)")
                 
                 # Plot
                 fig, ax = plt.subplots(figsize=(8, 5))
@@ -153,37 +153,89 @@ if uploaded_file is not None:
                 ax.legend(frameon=True)
                 st.pyplot(fig)
 
+            # Quantitative Calculations
+            total_area = np.trapz(y_corrected, x)
+            exp_h2_consumed_umol = total_area * calib_factor
+            exp_h2_per_g = (exp_h2_consumed_umol / sample_mass_mg) * 1000  # μmol H2 / g_cat
+            
+            cu_moles_per_g = (cu_wt_pct / 100.0) / 63.546  # mol Cu / g_cat
+            stoich_factor = 1.0 if "CuO" in stoich_ratio else 0.5
+            theo_h2_per_g = cu_moles_per_g * stoich_factor * 1e6  # μmol H2 / g_cat
+            
+            reduction_pct = min((exp_h2_per_g / theo_h2_per_g) * 100.0, 100.0) if theo_h2_per_g > 0 else 0.0
+            dispersion_pct = min((exp_h2_per_g / theo_h2_per_g) * 100.0, 100.0) if theo_h2_per_g > 0 else 0.0
+
             with col2:
-                st.subheader("📌 Peak Temperatures ($T_m$)")
+                st.subheader("📌 Reduction Peaks ($T_m$)")
                 if len(peaks) > 0:
                     peak_df = pd.DataFrame({
                         "Peak": [f"Peak {i+1}" for i in range(len(peaks))],
                         "T_m (°C)": x[peaks],
-                        "Intensity": y_corrected[peaks]
+                        "Intensity (a.u.)": y_corrected[peaks]
                     })
                     st.dataframe(peak_df, hide_index=True)
                 else:
+                    peak_df = pd.DataFrame(columns=["Peak", "T_m (°C)", "Intensity (a.u.)"])
                     st.info("No reduction peaks detected. Lower sensitivity slider in sidebar.")
 
-                # Quantitative Calculations
                 st.subheader("🧮 Quantitative Analysis")
-                
-                total_area = np.trapz(y_corrected, x)
-                exp_h2_consumed_umol = total_area * calib_factor
-                exp_h2_per_g = (exp_h2_consumed_umol / sample_mass_mg) * 1000  # μmol H2 / g_cat
-                
-                cu_moles_per_g = (cu_wt_pct / 100.0) / 63.546  # mol Cu / g_cat
-                stoich_factor = 1.0 if "CuO" in stoich_ratio else 0.5
-                theo_h2_per_g = cu_moles_per_g * stoich_factor * 1e6  # μmol H2 / g_cat
-                
-                reduction_pct = min((exp_h2_per_g / theo_h2_per_g) * 100.0, 100.0) if theo_h2_per_g > 0 else 0.0
-                dispersion_pct = min((exp_h2_per_g / theo_h2_per_g) * 100.0, 100.0) if theo_h2_per_g > 0 else 0.0
-
                 st.metric("Total Integrated Area", f"{total_area:.2f}")
                 st.metric("Exp. H₂ Consumed", f"{exp_h2_per_g:.2f} μmol/g_cat")
                 st.metric("Theo. H₂ Limit", f"{theo_h2_per_g:.2f} μmol/g_cat")
                 st.metric("Degree of Reduction (%)", f"{reduction_pct:.2f} %")
                 st.metric("Cu Dispersion (%)", f"{dispersion_pct:.2f} %")
+
+            # --- EXCEL REPORT GENERATION ---
+            st.markdown("---")
+            st.subheader("📥 Export Analysis Report")
+            
+            # Prepare Dataframes for Excel Export
+            summary_df = pd.DataFrame({
+                "Parameter": [
+                    "Sample Mass (mg)",
+                    "Cu Loading (wt%)",
+                    "Calibration Factor",
+                    "Oxidation Mode",
+                    "Total Integrated Area",
+                    "Experimental H2 Consumed (μmol/g_cat)",
+                    "Theoretical H2 Limit (μmol/g_cat)",
+                    "Degree of Reduction (%)",
+                    "Cu Dispersion (%)"
+                ],
+                "Value": [
+                    sample_mass_mg,
+                    cu_wt_pct,
+                    calib_factor,
+                    stoich_ratio,
+                    total_area,
+                    exp_h2_per_g,
+                    theo_h2_per_g,
+                    reduction_pct,
+                    dispersion_pct
+                ]
+            })
+
+            data_df = pd.DataFrame({
+                "Temperature (°C)": x,
+                "Raw TCD Signal": y,
+                "Subtracted Baseline": baseline,
+                "Corrected TCD Signal": y_corrected
+            })
+
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                summary_df.to_excel(writer, sheet_name="Analysis Summary", index=False)
+                peak_df.to_excel(writer, sheet_name="Peak Temperatures", index=False)
+                data_df.to_excel(writer, sheet_name="Processed Data", index=False)
+
+            excel_data = output.getvalue()
+
+            st.download_button(
+                label="📊 Download Full Excel Report (.xlsx)",
+                data=excel_data,
+                file_name="H2_TPR_Analysis_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
     except Exception as e:
         st.error(f"Error processing dataset: {e}")
