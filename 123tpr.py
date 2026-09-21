@@ -27,18 +27,32 @@ if uploaded_file is not None:
                 skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=0)
                 df = pd.read_excel(uploaded_file, sheet_name=sheet_name, skiprows=skiprows, engine="openpyxl")
             except Exception:
-                # Fallback to CSV parser with latin1 encoding if the file is an ASCII text file with an .xlsx extension
+                # Fallback to CSV parser if the file is an ASCII text file with an .xlsx extension
                 uploaded_file.seek(0)
                 st.sidebar.warning("Unable to read as native Excel. Attempting text/CSV parsing fallback...")
                 delimiter = st.sidebar.selectbox("Fallback Delimiter", [r"\s+", ",", ";", r"\t"], index=0)
                 skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=0)
-                df = pd.read_csv(uploaded_file, delimiter=delimiter, skiprows=skiprows, engine="python", encoding="latin1")
+                df = pd.read_csv(
+                    uploaded_file, 
+                    sep=delimiter, 
+                    skiprows=skiprows, 
+                    engine="python", 
+                    encoding="latin1",
+                    on_bad_lines="skip"
+                )
         else:
-            # Standard CSV / Text / DAT file parsing with latin1 encoding
+            # Standard CSV / Text / DAT file parsing
             uploaded_file.seek(0)
             delimiter = st.sidebar.selectbox("Delimiter", [r"\s+", ",", ";", r"\t"], index=0)
             skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=0)
-            df = pd.read_csv(uploaded_file, delimiter=delimiter, skiprows=skiprows, engine="python", encoding="latin1")
+            df = pd.read_csv(
+                uploaded_file, 
+                sep=delimiter, 
+                skiprows=skiprows, 
+                engine="python", 
+                encoding="latin1",
+                on_bad_lines="skip"
+            )
         
         st.sidebar.success("File loaded successfully!")
         
@@ -53,13 +67,13 @@ if uploaded_file is not None:
         x = pd.to_numeric(df_clean[temp_col], errors='coerce').values
         y = pd.to_numeric(df_clean[signal_col], errors='coerce').values
         
-        # Filter out NaN rows (e.g. residual text headers)
+        # Filter out NaN rows (e.g. residual text headers or footers)
         valid_idx = ~np.isnan(x) & ~np.isnan(y)
         x = x[valid_idx]
         y = y[valid_idx]
         
         if len(x) == 0:
-            st.error("No numeric data found. Adjust 'Header Lines to Skip' in the sidebar.")
+            st.error("No numeric data found. Adjust 'Header Lines to Skip' or check Delimiter setting in the sidebar.")
         else:
             # Baseline Correction
             st.sidebar.header("3. Baseline Correction")
