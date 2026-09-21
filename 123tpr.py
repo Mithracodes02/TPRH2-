@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 import io
+import re
 
 st.set_page_config(page_title="H2-TPR Data Analyzer", layout="wide")
 
@@ -37,18 +38,8 @@ if uploaded_file is not None:
             raw_text = raw_bytes.decode("latin1")
             lines = raw_text.splitlines()
 
-            # Find the first line with numeric data to suggest/auto-skip headers
-            auto_skip = 0
-            for i, line in enumerate(lines[:100]):
-                parts = line.strip().split()
-                # Check if line contains at least two numeric values
-                num_count = sum(1 for p in parts if p.replace('.', '', 1).replace('-', '', 1).isdigit())
-                if num_count >= 2:
-                    auto_skip = i
-                    break
-
             st.sidebar.markdown("---")
-            skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=auto_skip)
+            skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=18)
             delimiter_choice = st.sidebar.selectbox("Delimiter Mode", ["Auto-detect (Whitespace / Tab)", "Comma (,)", "Semicolon (;)", "Tab (\\t)", "Space (\\s+)"])
 
             sep_map = {
@@ -60,46 +51,65 @@ if uploaded_file is not None:
             }
             sep = sep_map[delimiter_choice]
 
-            # Read CSV using string buffer from selected line offset
             clean_text = "\n".join(lines[skiprows:])
             df = pd.read_csv(
                 io.StringIO(clean_text),
                 sep=sep,
                 engine="python",
                 on_bad_lines="skip",
-                header=None if skiprows > 0 else "infer"
+                header=None
             )
 
         st.sidebar.success("File loaded successfully!")
 
         # Preview Data Table in Sidebar
-        with st.sidebar.expander("Preview Raw Loaded Data", expanded=False):
-            st.dataframe(df.head(10))
+        with st.sidebar.expander("Preview Raw Loaded Data", expanded=True):
+            st.dataframe(df.head(15))
 
         # Column Selection
         st.sidebar.header("2. Map Columns")
         columns = df.columns.tolist()
         
-        # Format display names for numeric/text column headers
         col_options = [f"Column {c}" if isinstance(c, int) else str(c) for c in columns]
         
         temp_idx = st.sidebar.selectbox("Temperature Column (°C)", range(len(columns)), format_func=lambda i: col_options[i], index=0)
         signal_idx = st.sidebar.selectbox("TCD Signal Column (a.u. / mV)", range(len(columns)), format_func=lambda i: col_options[i], index=1 if len(columns) > 1 else 0)
 
-        # Extract and Clean Data
+        # Helper function to reliably convert mixed strings/numbers into float arrays
+        def extract_numeric_array(series):
+            cleaned_vals = []
+            for val in series:
+                if pd.isna(val):
+                    continue
+                val_str = str(val).strip().replace(',', '.')  # Handle European comma decimals
+                # Regex match float or integer patterns (e.g., -12.34 or 500)
+                match = re.search(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', val_str)
+                if match:
+                    try:
+                        cleaned_vals.append(float(match.group()))
+                    except ValueError:
+                        cleaned_vals.append(np.nan)
+                else:
+                    cleaned_vals.append(np.nan)
+            return np.array(cleaned_vals)
+
         raw_x = df.iloc[:, temp_idx]
         raw_y = df.iloc[:, signal_idx]
 
-        x = pd.to_numeric(raw_x, errors='coerce').values
-        y = pd.to_numeric(raw_y, errors='coerce').values
+        x_parsed = extract_numeric_array(raw_x)
+        y_parsed = extract_numeric_array(raw_y)
 
-        # Filter out NaN rows (e.g. residual text headers or footers)
-        valid_idx = ~np.isnan(x) & ~np.isnan(y)
-        x = x[valid_idx]
-        y = y[valid_idx]
+        # Align array lengths and remove NaNs
+        min_len = min(len(x_parsed), len(y_parsed))
+        x_parsed = x_parsed[:min_len]
+        y_parsed = y_parsed[:min_len]
+
+        valid_idx = ~np.isnan(x_parsed) & ~np.isnan(y_parsed)
+        x = x_parsed[valid_idx]
+        y = y_parsed[valid_idx]
 
         if len(x) == 0:
-            st.error("No numeric data found in selected columns. Try increasing 'Header Lines to Skip' or changing the 'Delimiter Mode' in the sidebar.")
+            st.error("No numeric data found in selected columns. Try setting 'Header Lines to Skip' to 19 or 20 in the sidebar, or check 'Preview Raw Loaded Data'.")
         else:
             # Baseline Correction
             st.sidebar.header("3. Baseline Correction")
