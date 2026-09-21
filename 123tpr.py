@@ -1,81 +1,106 @@
-import os
+import io
 import matplotlib.pyplot as plt
 import pandas as pd
+import streamlit as st
 import xlrd
 
+st.set_page_config(page_title="TPR Data Processor", layout="wide")
+st.title("TPR H2 Data Analysis & Report Generator")
 
-def process_tpr_data(input_file_path, output_excel_path, plot_image_path):
-    # 1. Read raw sheet using xlrd
-    workbook = xlrd.open_workbook(input_file_path)
-    sheet = workbook.sheet_by_index(0)
+# 1. File Uploader Component
+uploaded_file = st.file_uploader(
+    "Upload your raw TPR Excel file (.xls)", type=["xls", "xlsx"]
+)
 
-    # 2. Extract Data Rows for Temperature vs TCD Signal (Columns 22 & 23 in raw block)
-    data_rows = []
-    for r in range(24, sheet.nrows):
-        val_temp = sheet.cell_value(r, 22)
-        val_tcd = sheet.cell_value(r, 23)
-        if isinstance(val_temp, (int, float)) and isinstance(val_tcd, (int, float)):
-            data_rows.append({"Temperature (°C)": val_temp, "TCD Signal (a.u.)": val_tcd})
+if uploaded_file is not None:
+    try:
+        # Read raw content into xlrd workbook from memory
+        file_bytes = uploaded_file.read()
+        workbook = xlrd.open_workbook(file_contents=file_bytes)
+        sheet = workbook.sheet_by_index(0)
 
-    df = pd.DataFrame(data_rows)
+        # Extract Temperature & TCD Signal (Columns 22 and 23)
+        data_rows = []
+        for r in range(24, sheet.nrows):
+            val_temp = sheet.cell_value(r, 22)
+            val_tcd = sheet.cell_value(r, 23)
+            if isinstance(val_temp, (int, float)) and isinstance(
+                val_tcd, (int, float)
+            ):
+                data_rows.append(
+                    {"Temperature (°C)": val_temp, "TCD Signal (a.u.)": val_tcd}
+                )
 
-    # 3. Calculate Key Metrics
-    max_idx = df["TCD Signal (a.u.)"].idxmax()
-    t_max = df.loc[max_idx, "Temperature (°C)"]
-    signal_max = df.loc[max_idx, "TCD Signal (a.u.)"]
+        df = pd.DataFrame(data_rows)
 
-    summary_df = pd.DataFrame(
-        [
-            {"Metric": "Sample Name", "Value": "Inv95Cu5Zr 02.07.2026"},
-            {"Metric": "Data Points Count", "Value": len(df)},
-            {"Metric": "T_max (°C)", "Value": round(t_max, 2)},
-            {"Metric": "Max TCD Signal (a.u.)", "Value": round(signal_max, 6)},
-            {
-                "Metric": "Min Temperature (°C)",
-                "Value": round(df["Temperature (°C)"].min(), 2),
-            },
-            {
-                "Metric": "Max Temperature (°C)",
-                "Value": round(df["Temperature (°C)"].max(), 2),
-            },
-        ]
-    )
+        if not df.empty:
+            # Metrics
+            max_idx = df["TCD Signal (a.u.)"].idxmax()
+            t_max = df.loc[max_idx, "Temperature (°C)"]
+            signal_max = df.loc[max_idx, "TCD Signal (a.u.)"]
 
-    # 4. Generate Plot
-    plt.figure(figsize=(10, 5))
-    plt.plot(
-        df["Temperature (°C)"],
-        df["TCD Signal (a.u.)"],
-        color="crimson",
-        linewidth=1.5,
-        label="TCD Signal",
-    )
-    plt.title(
-        "TCD Signal (a.u.) vs. Temperature (°C)\nSample: Inv95Cu5Zr 02.07.2026",
-        fontsize=12,
-        pad=10,
-    )
-    plt.xlabel("Temperature (°C)", fontsize=11)
-    plt.ylabel("TCD Signal (a.u.)", fontsize=11)
-    plt.grid(True, linestyle="--", alpha=0.6)
-    plt.legend(loc="upper right")
-    plt.tight_layout()
-    plt.savefig(plot_image_path, dpi=300)
-    plt.close()
+            col1, col2 = st.columns(2)
+            col1.metric("T_max (°C)", f"{t_max:.2f}")
+            col2.metric("Max TCD Signal", f"{signal_max:.6f}")
 
-    # 5. Export Ready-to-Download Excel File
-    with pd.ExcelWriter(output_excel_path, engine="openpyxl") as writer:
-        summary_df.to_excel(writer, sheet_name="Summary", index=False)
-        df.to_excel(writer, sheet_name="TPR Data", index=False)
+            # Plot
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.plot(
+                df["Temperature (°C)"],
+                df["TCD Signal (a.u.)"],
+                color="crimson",
+                linewidth=1.5,
+                label="TCD Signal",
+            )
+            ax.set_title(
+                f"TCD Signal vs. Temperature ({uploaded_file.name})", pad=10
+            )
+            ax.set_xlabel("Temperature (°C)")
+            ax.set_ylabel("TCD Signal (a.u.)")
+            ax.grid(True, linestyle="--", alpha=0.6)
+            ax.legend()
+            st.pyplot(fig)
 
-    print(f"Report generated successfully:\n- Excel: {output_excel_path}\n- Plot: {plot_image_path}")
-    return df
+            # Generate Downloadable Excel Report in Memory
+            summary_df = pd.DataFrame(
+                [
+                    {"Metric": "File Name", "Value": uploaded_file.name},
+                    {"Metric": "Data Points Count", "Value": len(df)},
+                    {"Metric": "T_max (°C)", "Value": round(t_max, 2)},
+                    {
+                        "Metric": "Max TCD Signal (a.u.)",
+                        "Value": round(signal_max, 6),
+                    },
+                    {
+                        "Metric": "Min Temperature (°C)",
+                        "Value": round(df["Temperature (°C)"].min(), 2),
+                    },
+                    {
+                        "Metric": "Max Temperature (°C)",
+                        "Value": round(df["Temperature (°C)"].max(), 2),
+                    },
+                ]
+            )
 
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(
+                excel_buffer, engine="openpyxl"
+            ) as writer:
+                summary_df.to_excel(
+                    writer, sheet_name="Summary", index=False
+                )
+                df.to_excel(writer, sheet_name="TPR Data", index=False)
 
-# Example Execution
-if __name__ == "__main__":
-    input_file = "Inv 95Cu5ZrO2 02.07.26.xls"
-    output_excel = "Inv95Cu5ZrO2_TPR_Report.xlsx"
-    plot_file = "tcd_vs_temperature.png"
+            st.download_button(
+                label="📥 Download Excel Report",
+                data=excel_buffer.getvalue(),
+                file_name=f"Processed_{uploaded_file.name.rsplit('.', 1)[0]}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        else:
+            st.error("No valid numeric data found in columns 22 and 23.")
 
-    process_tpr_data(input_file, output_excel, plot_file)
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
+else:
+    st.info("Please upload an Excel file to begin.")
