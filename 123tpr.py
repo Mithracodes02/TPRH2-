@@ -27,18 +27,18 @@ if uploaded_file is not None:
                 skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=0)
                 df = pd.read_excel(uploaded_file, sheet_name=sheet_name, skiprows=skiprows, engine="openpyxl")
             except Exception:
-                # Fallback to CSV parser if the file is an ASCII text file with an .xlsx extension
+                # Fallback to CSV parser with latin1 encoding if the file is an ASCII text file with an .xlsx extension
                 uploaded_file.seek(0)
                 st.sidebar.warning("Unable to read as native Excel. Attempting text/CSV parsing fallback...")
                 delimiter = st.sidebar.selectbox("Fallback Delimiter", [r"\s+", ",", ";", r"\t"], index=0)
                 skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=0)
-                df = pd.read_csv(uploaded_file, delimiter=delimiter, skiprows=skiprows, engine="python")
+                df = pd.read_csv(uploaded_file, delimiter=delimiter, skiprows=skiprows, engine="python", encoding="latin1")
         else:
-            # Standard CSV / Text / DAT file parsing
+            # Standard CSV / Text / DAT file parsing with latin1 encoding
             uploaded_file.seek(0)
             delimiter = st.sidebar.selectbox("Delimiter", [r"\s+", ",", ";", r"\t"], index=0)
             skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=0)
-            df = pd.read_csv(uploaded_file, delimiter=delimiter, skiprows=skiprows, engine="python")
+            df = pd.read_csv(uploaded_file, delimiter=delimiter, skiprows=skiprows, engine="python", encoding="latin1")
         
         st.sidebar.success("File loaded successfully!")
         
