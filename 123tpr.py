@@ -41,7 +41,7 @@ if uploaded_file is not None:
         x = pd.to_numeric(df_clean[temp_col], errors='coerce').values
         y = pd.to_numeric(df_clean[signal_col], errors='coerce').values
         
-        # Remove NaNs if header text was captured
+        # Remove NaNs if non-numeric headers were captured
         valid_idx = ~np.isnan(x) & ~np.isnan(y)
         x = x[valid_idx]
         y = y[valid_idx]
@@ -64,17 +64,17 @@ if uploaded_file is not None:
         calib_factor = st.sidebar.number_input("Calibration Factor (μmol H₂ / (a.u. · °C))", min_value=1e-8, value=1.0, format="%.6f")
         stoich_ratio = st.sidebar.selectbox("Cu Oxidation State Mode", ["CuO -> Cu (1 H2 : 1 Cu)", "Cu2O -> Cu (0.5 H2 : 1 Cu)"], index=0)
 
-        # Main Layout Split
+        # Layout Split
         col1, col2 = st.columns([2, 1])
 
         with col1:
             st.subheader("📊 TPR Profile & Reduction Temperatures")
             
-            # Peak Finding
+            # Peak Detection Settings
             prominence = st.sidebar.slider("Peak Detection Sensitivity", 0.0, float(np.ptp(y_corrected)), float(np.ptp(y_corrected) * 0.05))
             peaks, _ = find_peaks(y_corrected, prominence=prominence)
             
-            # Plot
+            # Plotting
             fig, ax = plt.subplots(figsize=(8, 5))
             ax.plot(x, y_corrected, label="Corrected TCD Signal", color="crimson", lw=1.8)
             ax.plot(x[peaks], y_corrected[peaks], "ro", markersize=6, label="Reduction Maxima ($T_m$)")
