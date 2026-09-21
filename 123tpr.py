@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
+import io
 
 st.set_page_config(page_title="H2-TPR Data Analyzer", layout="wide")
 
@@ -27,53 +28,78 @@ if uploaded_file is not None:
                 skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=0)
                 df = pd.read_excel(uploaded_file, sheet_name=sheet_name, skiprows=skiprows, engine="openpyxl")
             except Exception:
-                # Fallback to CSV parser if the file is an ASCII text file with an .xlsx extension
-                uploaded_file.seek(0)
-                st.sidebar.warning("Unable to read as native Excel. Attempting text/CSV parsing fallback...")
-                delimiter = st.sidebar.selectbox("Fallback Delimiter", [r"\s+", ",", ";", r"\t"], index=0)
-                skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=0)
-                df = pd.read_csv(
-                    uploaded_file, 
-                    sep=delimiter, 
-                    skiprows=skiprows, 
-                    engine="python", 
-                    encoding="latin1",
-                    on_bad_lines="skip"
-                )
-        else:
-            # Standard CSV / Text / DAT file parsing
+                file_ext = "csv"  # Fall back to text processing
+
+        if file_ext not in ["xlsx", "xls"] or df is None:
+            # Text / CSV / DAT file handling
             uploaded_file.seek(0)
-            delimiter = st.sidebar.selectbox("Delimiter", [r"\s+", ",", ";", r"\t"], index=0)
-            skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=0)
+            raw_bytes = uploaded_file.read()
+            raw_text = raw_bytes.decode("latin1")
+            lines = raw_text.splitlines()
+
+            # Find the first line with numeric data to suggest/auto-skip headers
+            auto_skip = 0
+            for i, line in enumerate(lines[:100]):
+                parts = line.strip().split()
+                # Check if line contains at least two numeric values
+                num_count = sum(1 for p in parts if p.replace('.', '', 1).replace('-', '', 1).isdigit())
+                if num_count >= 2:
+                    auto_skip = i
+                    break
+
+            st.sidebar.markdown("---")
+            skiprows = st.sidebar.number_input("Header Lines to Skip", min_value=0, value=auto_skip)
+            delimiter_choice = st.sidebar.selectbox("Delimiter Mode", ["Auto-detect (Whitespace / Tab)", "Comma (,)", "Semicolon (;)", "Tab (\\t)", "Space (\\s+)"])
+
+            sep_map = {
+                "Auto-detect (Whitespace / Tab)": r"\s+",
+                "Comma (,)": ",",
+                "Semicolon (;)": ";",
+                "Tab (\\t)": r"\t",
+                "Space (\\s+)": r"\s+"
+            }
+            sep = sep_map[delimiter_choice]
+
+            # Read CSV using string buffer from selected line offset
+            clean_text = "\n".join(lines[skiprows:])
             df = pd.read_csv(
-                uploaded_file, 
-                sep=delimiter, 
-                skiprows=skiprows, 
-                engine="python", 
-                encoding="latin1",
-                on_bad_lines="skip"
+                io.StringIO(clean_text),
+                sep=sep,
+                engine="python",
+                on_bad_lines="skip",
+                header=None if skiprows > 0 else "infer"
             )
-        
+
         st.sidebar.success("File loaded successfully!")
-        
+
+        # Preview Data Table in Sidebar
+        with st.sidebar.expander("Preview Raw Loaded Data", expanded=False):
+            st.dataframe(df.head(10))
+
         # Column Selection
         st.sidebar.header("2. Map Columns")
         columns = df.columns.tolist()
-        temp_col = st.sidebar.selectbox("Temperature Column (°C)", columns, index=0 if len(columns) > 0 else 0)
-        signal_col = st.sidebar.selectbox("TCD Signal Column (a.u. / mV)", columns, index=1 if len(columns) > 1 else 0)
         
+        # Format display names for numeric/text column headers
+        col_options = [f"Column {c}" if isinstance(c, int) else str(c) for c in columns]
+        
+        temp_idx = st.sidebar.selectbox("Temperature Column (°C)", range(len(columns)), format_func=lambda i: col_options[i], index=0)
+        signal_idx = st.sidebar.selectbox("TCD Signal Column (a.u. / mV)", range(len(columns)), format_func=lambda i: col_options[i], index=1 if len(columns) > 1 else 0)
+
         # Extract and Clean Data
-        df_clean = df[[temp_col, signal_col]].dropna()
-        x = pd.to_numeric(df_clean[temp_col], errors='coerce').values
-        y = pd.to_numeric(df_clean[signal_col], errors='coerce').values
-        
+        raw_x = df.iloc[:, temp_idx]
+        raw_y = df.iloc[:, signal_idx]
+
+        x = pd.to_numeric(raw_x, errors='coerce').values
+        y = pd.to_numeric(raw_y, errors='coerce').values
+
         # Filter out NaN rows (e.g. residual text headers or footers)
         valid_idx = ~np.isnan(x) & ~np.isnan(y)
         x = x[valid_idx]
         y = y[valid_idx]
-        
+
         if len(x) == 0:
-            st.error("No numeric data found. Adjust 'Header Lines to Skip' or check Delimiter setting in the sidebar.")
+            st.error("No numeric data found in selected columns. Try increasing 'Header Lines to Skip' or changing the 'Delimiter Mode' in the sidebar.")
         else:
             # Baseline Correction
             st.sidebar.header("3. Baseline Correction")
